@@ -28,9 +28,17 @@
     return res.status === 204 ? null : res.json();
   }
 
+  async function findItem() {
+    // Exact file ID (most reliable) - falls back to the sharing link
+    if (cfg.driveId && cfg.itemId) {
+      return call("GET", "/drives/" + cfg.driveId + "/items/" + cfg.itemId + "?$select=id,name,parentReference");
+    }
+    return call("GET", "/shares/" + shareId(cfg.workbookShareUrl) + "/driveItem?$select=id,name,parentReference");
+  }
+
   async function base() {
     if (itemBase) return itemBase;
-    var item = await call("GET", "/shares/" + shareId(cfg.workbookShareUrl) + "/driveItem?$select=id,name,parentReference");
+    var item = await findItem();
     itemBase = "/drives/" + item.parentReference.driveId + "/items/" + item.id +
                "/workbook/worksheets/" + encodeURIComponent(cfg.sheetName);
     window.TCCWorkbookName = item.name;

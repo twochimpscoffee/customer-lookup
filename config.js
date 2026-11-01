@@ -4,13 +4,17 @@
    ============================================================ */
 window.TCC_CONFIG = {
   // From the Entra app registration ("Application (client) ID") - step 2 of the setup guide
-  clientId: "PASTE-CLIENT-ID-HERE",
+  clientId: "32360b19-8075-4d21-ba39-034d56514803",
   // Your Microsoft 365 tenant ("Directory (tenant) ID") - same page
-  tenantId: "PASTE-TENANT-ID-HERE",
+  tenantId: "7513cbbc-9f58-498a-be21-b7c12713405d",
 
-  // Sharing link to the spreadsheet (Excel > Share > Copy link).
-  // TESTING: the CLAUDE TEST copy.  GOING LIVE: swap in the live file's link.
-  workbookShareUrl: "PASTE-SHARE-LINK-TO-CLAUDE-TEST-COPY-HERE",
+  // The spreadsheet the panel reads and edits.
+  // TESTING: "on boarding updated CLAUDE TEST.xlsx" (Two Chimps Coffee site > Documents)
+  // GOING LIVE: Claude will give you the live file's two IDs to swap in here.
+  driveId: "b!66b-DgKPbUaA7ma0wCDb7qWYb636lyxAsGXW7dSgiwgYQHIYNrRLR4W8vzjHycI7",
+  itemId: "014EVWT2SXYZTWG3COCNG2JLBBFB2OYHUW",
+  // Backup: the sharing link, only used if the two IDs above are blank
+  workbookShareUrl: "https://twochimpscoffee.sharepoint.com/:x:/r/sites/TwoChimpsCoffee/Shared%20Documents/on%20boarding%20updated%20CLAUDE%20TEST.xlsx?d=w6367c6574e6c4d13a4ac212874ec1e96&csf=1&web=1&e=bijphm",
   sheetName: "Sheet1",
 
   firstDataRow: 3,          // customers start on row 3 (rows 1-2 are headers)

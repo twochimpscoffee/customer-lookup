@@ -77,6 +77,7 @@
     try {
       var both = await Promise.all([TCCGraph.readIndex(), TCCGraph.readHeaders()]);
       state.index = both[0]; state.headers = both[1];
+      $("foot").textContent = "Reads and writes: " + (window.TCCWorkbookName || "customer spreadsheet") + ".";
       var q = { name: query.name, email: cfg.placeholderEmails.indexOf(String(query.email || "").toLowerCase()) >= 0 ? "" : query.email };
       var rows = state.index.rows.map(function (r) {
         return cfg.placeholderEmails.indexOf(r.email.trim().toLowerCase()) >= 0 ? { row: r.row, name: r.name, email: "" } : r;
@@ -317,7 +318,7 @@
 
   Office.onReady(function () {
     $("searchForm").onsubmit = function (ev) { ev.preventDefault(); lookup({ name: $("qName").value.trim(), email: $("qEmail").value.trim() }); };
-    $("foot").textContent = "Reads and writes: " + (cfg.workbookShareUrl.indexOf("PASTE") === 0 ? "(spreadsheet link not set)" : "customer spreadsheet") + ".";
+    $("foot").textContent = "Reads and writes: " + (window.TCCWorkbookName || "customer spreadsheet") + ".";
     if (Office.context.mailbox && Office.context.mailbox.addHandlerAsync) {
       // pinned panel: refresh when a different email is selected
       Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () { state.rows = {}; run(); });
