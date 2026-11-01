@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Signing in…</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+</head>
+<body style="font-family:Segoe UI,sans-serif;padding:20px">
+  <p>Signing you in to Microsoft 365…</p>
+  <script>
+    Office.onReady(async function () {
+      var cfg = window.TCC_CONFIG;
+      var here = location.origin + location.pathname;
+      var pca = new msal.PublicClientApplication({
+        auth: { clientId: cfg.clientId, authority: "https://login.microsoftonline.com/" + cfg.tenantId, redirectUri: here },
+        cache: { cacheLocation: "localStorage" }
+      });
+      await pca.initialize();
+      function send(o) { Office.context.ui.messageParent(JSON.stringify(o)); }
+      try {
+        var r = await pca.handleRedirectPromise();
+        if (r && r.accessToken) return send({ token: r.accessToken });
+        var acc = pca.getAllAccounts()[0];
+        if (acc) {
+          try { var s = await pca.acquireTokenSilent({ scopes: TCCAuth.SCOPES, account: acc }); return send({ token: s.accessToken }); }
+          catch (e) { /* fall through to redirect */ }
+        }
+        await pca.loginRedirect({ scopes: TCCAuth.SCOPES });
+      } catch (e) { send({ error: String(e.message || e) }); }
+    });
+  </script>
+</body>
+</html>
