@@ -11,22 +11,58 @@
     return "u!" + b64.replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
   }
 
-  async function call(method, path, body) {
+  var TIMEOUT_MS = 90000;
+  var session = null;          // one Excel session per panel, so the workbook is opened once, not per request
+  var wbPath = null;
+
+  async function call(method, path, body, useSession) {
     var token = await TCCAuth.getToken();
-    var res = await fetch(path.indexOf("http") === 0 ? path : GRAPH + path, {
-      method: method,
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined
-    });
+    var headers = { Authorization: "Bearer " + token, "Content-Type": "application/json" };
+    if (useSession && session) headers["workbook-session-id"] = session.id;
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, TIMEOUT_MS) : null;
+    var res;
+    try {
+      res = await fetch(path.indexOf("http") === 0 ? path : GRAPH + path, {
+        method: method, headers: headers, body: body ? JSON.stringify(body) : undefined,
+        signal: ctl ? ctl.signal : undefined
+      });
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        var te = new Error("The spreadsheet took too long to respond. It may still be recalculating - open it once in Excel, then try again.");
+        te.status = "timeout"; throw te;
+      }
+      throw e;
+    } finally { if (timer) clearTimeout(timer); }
     if (!res.ok) {
       var t = await res.text();
-      var msg = t;
-      try { msg = JSON.parse(t).error.message; } catch (e) {}
+      var msg = t, code = "";
+      try { var j = JSON.parse(t).error; msg = j.message; code = j.code || ""; } catch (e) {}
       var err = new Error(msg || ("Microsoft 365 error " + res.status));
-      err.status = res.status;
+      err.status = res.status; err.code = code;
+      if (/session/i.test(code + " " + msg)) session = null;   // expired - a new one is made next time
       throw err;
     }
+    if (session) session.at = Date.now();
     return res.status === 204 ? null : res.json();
+  }
+
+  async function ensureSession() {
+    await base();
+    if (session && Date.now() - session.at < 4 * 60000) return;
+    var r = await call("POST", wbPath + "/createSession", { persistChanges: true });
+    session = { id: r.id, at: Date.now() };
+  }
+
+  /* Workbook request through the session, retried once if the session had expired */
+  async function wbCall(method, path, body) {
+    await ensureSession();
+    try { return await call(method, path, body, true); }
+    catch (e) {
+      if (session) throw e;
+      await ensureSession();
+      return call(method, path, body, true);
+    }
   }
 
   async function findItem() {
@@ -40,8 +76,8 @@
   async function base() {
     if (itemBase) return itemBase;
     var item = await findItem();
-    itemBase = "/drives/" + item.parentReference.driveId + "/items/" + item.id +
-               "/workbook/worksheets/" + encodeURIComponent(cfg.sheetName);
+    wbPath = "/drives/" + item.parentReference.driveId + "/items/" + item.id + "/workbook";
+    itemBase = wbPath + "/worksheets/" + encodeURIComponent(cfg.sheetName);
     window.TCCWorkbookName = item.name;
     return itemBase;
   }
@@ -49,13 +85,15 @@
   function rangePath(b, addr) { return b + "/range(address='" + addr + "')"; }
 
   // Chunked $batch (Graph allows 20 requests per batch)
-  async function batch(reqs) {
+  async function batch(reqs, retried) {
     var b = (await base()).replace(/^\//, "");
+    await ensureSession();
     var out = [];
     for (var i = 0; i < reqs.length; i += 20) {
       var chunk = reqs.slice(i, i + 20).map(function (r, j) {
         var q = { id: String(i + j), method: r.method, url: "/" + b + r.url };
-        if (r.body) { q.body = r.body; q.headers = { "Content-Type": "application/json" }; }
+        q.headers = { "workbook-session-id": session.id };
+        if (r.body) { q.body = r.body; q.headers["Content-Type"] = "application/json"; }
         // Excel prefers workbook writes one after another, so chain writes within a batch
         if (r.method !== "GET" && j > 0) q.dependsOn = [String(i + j - 1)];
         return q;
@@ -63,12 +101,13 @@
       var res = await call("POST", GRAPH + "/$batch", { requests: chunk });
       res.responses.forEach(function (r) { out[Number(r.id)] = r; });
     }
-    out.forEach(function (r) {
-      if (r && r.status >= 400) {
-        var e = new Error((r.body && r.body.error && r.body.error.message) || "Update failed");
-        e.status = r.status; throw e;
-      }
-    });
+    var bad = out.filter(function (r) { return r && r.status >= 400; })[0];
+    if (bad) {
+      var be = bad.body && bad.body.error ? bad.body.error : {};
+      if (!retried && /session/i.test((be.code || "") + " " + (be.message || ""))) { session = null; return batch(reqs, true); }
+      var e = new Error(be.message || "Update failed");
+      e.status = bad.status; throw e;
+    }
     return out;
   }
   function rangeUrl(addr, select) { return "/range(address='" + addr + "')" + (select ? "?$select=" + select : ""); }
@@ -76,14 +115,14 @@
   /* How big the sheet is: {lastCol: "CI", lastRow: 13048} */
   async function sheetSize() {
     var b = await base();
-    var r = await call("GET", b + "/usedRange(valuesOnly=true)?$select=address");
+    var r = await wbCall("GET", b + "/usedRange(valuesOnly=true)?$select=address");
     var m = String(r.address).split("!").pop().match(/([A-Z]+)(\d+)$/);
     return { lastCol: m ? m[1] : "CI", lastRow: m ? Number(m[2]) : 20000 };
   }
 
   async function readHeaders(lastCol) {
     var b = await base();
-    var r = await call("GET", rangePath(b, "A1:" + lastCol + cfg.headerRows) + "?$select=values");
+    var r = await wbCall("GET", rangePath(b, "A1:" + lastCol + cfg.headerRows) + "?$select=values");
     return r.values;
   }
 
