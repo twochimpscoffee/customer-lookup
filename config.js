@@ -1,11 +1,12 @@
 /* ============================================================
    Two Chimps customer lookup - SETTINGS
    This is the only file you should need to change.
+   Columns are found by their HEADER NAME, not their letter, so you can
+   add, move or insert columns in the spreadsheet without changing this.
    ============================================================ */
 window.TCC_CONFIG = {
-  // From the Entra app registration ("Application (client) ID") - step 2 of the setup guide
+  // From the Entra app registration
   clientId: "32360b19-8075-4d21-ba39-034d56514803",
-  // Your Microsoft 365 tenant ("Directory (tenant) ID") - same page
   tenantId: "7513cbbc-9f58-498a-be21-b7c12713405d",
 
   // The spreadsheet the panel reads and edits.
@@ -17,9 +18,7 @@ window.TCC_CONFIG = {
   workbookShareUrl: "https://twochimpscoffee.sharepoint.com/:x:/r/sites/TwoChimpsCoffee/Shared%20Documents/on%20boarding%20updated%20CLAUDE%20TEST.xlsx?d=w6367c6574e6c4d13a4ac212874ec1e96&csf=1&web=1&e=bijphm",
   sheetName: "Sheet1",
 
-  firstDataRow: 3,          // customers start on row 3 (rows 1-2 are headers)
-  lastFormulaRow: 13048,    // formulas are filled down to here
-  lastColumn: "CD",
+  headerRows: 2,            // rows 1-2 are headers, customers start on row 3
 
   // Not real email addresses - match these customers on name only
   placeholderEmails: ["noths"],
@@ -28,36 +27,36 @@ window.TCC_CONFIG = {
   tickValue: "a",
   tickFont: "Webdings",
 
-  // Fields shown in the panel. type: text | longtext | date | select | tick
-  fields: [
-    { col: "A",  label: "Name",            type: "text",  key: "name" },
-    { col: "B",  label: "Email",           type: "text",  key: "email" },
-    { col: "N",  label: "Phone",           type: "text",  key: "phone" },
-    { col: "U",  label: "Frequency",       type: "select",
+  // The main fields, found by header text (row 1 or row 2), shown in this order.
+  // type: text | longtext | date | select | tick
+  coreFields: [
+    { key: "name",      header: "Name",            label: "Name",            type: "text" },
+    { key: "email",     header: "Email address",   label: "Email",           type: "text" },
+    { key: "phone",     header: "Phone",           label: "Phone",           type: "text" },
+    { key: "frequency", header: "Frequency",       label: "Frequency",       type: "select",
       options: ["Weekly", "Fortnightly", "Monthly", "Once", "Sample", "Cancelled", "Gift Subs", "NOTHS Subs"] },
-    { col: "Q",  label: "Hand delivery day", type: "select", options: ["Wed", "Thur"] },
-    { col: "R",  label: "1st order posted", type: "date" },
-    { col: "S",  label: "Last order date", type: "date" },
-    { col: "T",  label: "Discount code",   type: "text" },
-    { col: "M",  label: "Flavour wheel leaflet sent", type: "tick" },
-    { col: "O",  label: "Course leaflet sent", type: "tick" },
-    { col: "P",  label: "Notes",           type: "longtext" }
+    { key: "delivery",  header: "Hand Delivery Day", label: "Hand delivery day", type: "select", options: ["Wed", "Thur"] },
+    { key: "posted",    header: "Posted date",     label: "1st order posted", type: "date" },
+    { key: "lastOrder", header: "Last Order Date", label: "Last order date", type: "date" },
+    { key: "discount",  header: "Discount Code",   label: "Discount code",   type: "text" },
+    { key: "flavour",   header: "Flavour Wheel Leaflet Sent?", label: "Flavour wheel leaflet sent", type: "tick" },
+    { key: "course",    header: "Course Leaflet Sent", label: "Course leaflet sent", type: "tick" },
+    { key: "notes",     header: "Notes",           label: "Notes",           type: "longtext" }
   ],
 
-  // "Due now" shows phases due in the last this-many days; older unticked ones are tucked away
-  dueWindowDays: 60,
+  // Every OTHER column with a header is shown automatically under "More details",
+  // as a tick box, date or text (worked out from the column). To force a type,
+  // add the header here, e.g.  "xmas brochure": "tick"
+  fieldTypes: {},
 
-  // Phases: due = formula column (date, or "yes"), done = tick column,
-  // canSend = optional formula column; "no" there means not due yet.
-  phases: [
-    { due: "AC", done: "AD" }, { due: "AE", done: "AF" }, { due: "AG", done: "AH" },
-    { due: "AI", done: "AJ" }, { due: "AK", done: "AL" }, { due: "AM", done: "AO", canSend: "AN" },
-    { due: "AP", done: "AQ" }, { due: "AR", done: "AS" }, { due: "AT", done: "AV", canSend: "AU" },
-    { due: "AW", done: "AY", canSend: "AX" }, { due: "AZ", done: "BA" },
-    { due: "BB", done: "BD", canSend: "BC" }, { due: "BG", done: "BH" }, { due: "BI", done: "BJ" },
-    { due: "BK", done: "BL" }, { due: "BM", done: "BN" }, { due: "BO", done: "BP" },
-    { due: "BQ", done: "BR" }, { due: "BS", done: "BT" }, { due: "BU", done: "BV" },
-    { due: "BW", done: "BX" }, { due: "BY", done: "BZ" }, { due: "CA", done: "CB" },
-    { due: "CC", done: "CD" }
-  ]
+  // Columns to leave out of the panel (by header text)
+  hideHeaders: [],
+
+  // Helper columns that hold the dropdown lists - never shown or edited
+  ignoreHeaders: ["Weekly", "Fortnightly", "Delivery Day"],
+
+  // "Due now" shows phases due in the last this-many days; older unticked ones are tucked away.
+  // Phases are found automatically: a formula column (or two, e.g. "Can we send?")
+  // followed by the column where it's ticked off.
+  dueWindowDays: 60
 };

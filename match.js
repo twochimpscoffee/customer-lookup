@@ -91,9 +91,11 @@
     var out = [];
 
     rows.forEach(function (r) {
-      var rEmail = normEmail(r.email);
-      var rEmailOk = isUsableEmail(rEmail);
-      var emailSame = useEmail && rEmailOk && rEmail === qEmail;
+      // a cell can hold more than one address, e.g. "a@x.com / b@y.com"
+      var rEmails = normEmail(r.email).split(/[\s\/,;]+/).filter(isUsableEmail);
+      var rEmail = rEmails.indexOf(qEmail) >= 0 ? qEmail : (rEmails[0] || "");
+      var rEmailOk = rEmails.length > 0;
+      var emailSame = useEmail && rEmailOk && rEmails.indexOf(qEmail) >= 0;
       var ns = nameScore(qName, r.name);
       var nameSame = qName && normName(r.name) === qName;
       var c = null;
@@ -105,7 +107,7 @@
         c = { level: "name", score: 2.0,
               reason: rEmailOk ? "Name matches, but the email is different" : "Name matches, no email on this row" };
       } else {
-        var es = useEmail ? emailScore(qEmail, rEmail) : 0;
+        var es = useEmail ? Math.max.apply(null, [0].concat(rEmails.map(function (x) { return emailScore(qEmail, x); }))) : 0;
         if (es > 0 && ns >= 0.6) c = { level: "close", score: 1.5 + es / 10, reason: "Similar email and name" };
         else if (es > 0) c = { level: "close", score: 1.2 + es / 10, reason: "Very similar email address" };
         else if (ns >= 0.85) c = { level: "close", score: 1 + ns / 10, reason: "Similar name" };

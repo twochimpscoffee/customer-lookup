@@ -11,6 +11,26 @@
       .filter(function (l) { return l.length; });
   }
 
+  // Turn the email's HTML into one-thing-per-line text. Outlook's plain-text version of these
+  // emails runs the billing address into everything else, so we use the HTML instead.
+  var BLOCK = /<\/?(p|div|tr|td|th|h[1-6]|li|ul|ol|table|tbody|thead|address|section|header|footer)\b[^>]*>/gi;
+  function htmlToText(html) {
+    var s = String(html || "")
+      .replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(BLOCK, "\n")
+      .replace(/<[^>]+>/g, "");
+    var ent = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", pound: "£" };
+    s = s.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, function (m, e) {
+      if (e[0] === "#") return String.fromCharCode(e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+      return ent[e.toLowerCase()] != null ? ent[e.toLowerCase()] : m;
+    });
+    return s.replace(/[ \t ]+/g, " ");
+  }
+
+  var OWN_EMAIL = /@twochimpscoffee\.com$|noreply|no-reply|wordpress@/i;
+
   function titleCase(s) {
     return s.toLowerCase().replace(/(^|[\s'-])([a-z])/g, function (m, p, c) { return p + c.toUpperCase(); });
   }
@@ -21,9 +41,9 @@
     var res = { name: "", email: "", phone: "", orderNo: "", orderDate: "", orderType: "",
                 renewEvery: "", isSubscription: false, isSample: false, found: false };
 
-    var bi = lines.findIndex(function (l) { return /^billing address$/i.test(l); });
+    var bi = lines.findIndex(function (l) { return /^billing address:?$/i.test(l); });
     if (bi >= 0) {
-      var end = lines.findIndex(function (l, i) { return i > bi && /^shipping address$|^congratulations/i.test(l); });
+      var end = lines.findIndex(function (l, i) { return i > bi && /^shipping address:?$|^congratulations/i.test(l); });
       var block = lines.slice(bi + 1, end > 0 ? end : bi + 12);
       if (block.length) res.name = block[0];
       block.forEach(function (l) {
@@ -32,10 +52,15 @@
         else if (!m && PHONE_RE.test(l) && !res.phone) res.phone = l.replace(/\s+/g, "");
       });
     }
-    // fallback: "order from Thomas JENNEY."
+    // fallbacks: "order from Thomas JENNEY." / "order from Megan Ross:"
     if (!res.name) {
-      var f = String(text).match(/order from ([^.\n]+)\./i);
+      var f = String(text).match(/order from ([^:.\n\[]{2,60}?)\s*[:.\n\[]/i);
       if (f) res.name = f[1].trim();
+    }
+    if (!res.email) {
+      var all = String(text).match(new RegExp(EMAIL_RE.source, "g")) || [];
+      var cust = all.filter(function (e) { return !OWN_EMAIL.test(e); });
+      if (cust.length) res.email = cust[0];
     }
     // WooCommerce often shouts surnames ("Thomas JENNEY") - tidy for display/new rows
     res.nameTidy = /\b[A-Z]{3,}\b/.test(res.name) ? titleCase(res.name) : res.name;
@@ -69,7 +94,10 @@
     return "";
   }
 
-  var api = { parseOrderEmail: parseOrderEmail, guessFrequency: guessFrequency };
+  function parseOrderHtml(html, subject) { return parseOrderEmail(htmlToText(html), subject); }
+
+  var api = { parseOrderEmail: parseOrderEmail, parseOrderHtml: parseOrderHtml, htmlToText: htmlToText,
+              guessFrequency: guessFrequency };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TCCParse = api;
 })(this);

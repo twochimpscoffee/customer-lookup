@@ -1,17 +1,17 @@
-/* Two Chimps customer lookup - side panel logic */
+/* Two Chimps customer lookup - side panel logic.
+   Columns are found by header name (see schema.js), never by fixed letter. */
 (function () {
   "use strict";
   var cfg = window.TCC_CONFIG;
-  var state = { parsed: null, index: null, headers: null, rows: {}, current: null, query: null };
+  var state = { parsed: null, index: null, schema: null, size: null, rows: {}, current: null, query: null };
   var $ = function (id) { return document.getElementById(id); };
+  var CACHE_KEY = "tccSchemaV2";
 
   // ---------- helpers ----------
-  function colIdx(col) { var n = 0; for (var i = 0; i < col.length; i++) n = n * 26 + (col.charCodeAt(i) - 64); return n - 1; }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function serialToISO(v) {
     if (typeof v !== "number" || v < 1) return "";
-    var d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
-    return d.toISOString().slice(0, 10);
+    return new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000).toISOString().slice(0, 10);
   }
   function isoToSerial(s) {
     if (!s) return "";
@@ -24,26 +24,20 @@
     return new Date(iso + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   }
   function isTicked(v) { return v != null && String(v).trim() !== ""; }
-  function isPlainTick(v) { var s = String(v || "").trim(); return s === "" || /^(a+|ü+|A)$/.test(s); }
-  function headerFor(col) {
-    var i = colIdx(col), h = state.headers || [[], []];
-    var a = (h[0] && h[0][i]) || "", b = (h[1] && h[1][i]) || "";
-    a = String(a).trim(); b = String(b).trim();
-    return b || a || col;
-  }
-  function phaseLabel(p) {
-    var i = colIdx(p.due), h = state.headers || [[], []];
-    var top = String((h[0] && h[0][i]) || "").trim(), sub = String((h[1] && h[1][i]) || "").trim();
-    return sub ? (top && /^phase/i.test(top) ? top + " – " + sub : sub || top) : top;
-  }
-  function recency(r) { var v = r.values; return v[colIdx("S")] || v[colIdx("R")] || 0; }
+  function isPlainTick(v) { var s = String(v == null ? "" : v).trim(); return s === "" || /^(a{1,3}|ü{1,3}|A)$/.test(s); }
+  function core(key) { return state.schema && state.schema.byKey[key]; }
+  function cell(data, key) { var f = core(key); return f ? data.values[f.idx] : ""; }
+  // shown in the panel unless the column is hidden in Excel (name + email always shown)
+  function shown(f) { return !(state.hidden && state.hidden[f.idx]) || f.key === "name" || f.key === "email"; }
+  function phaseShown(p) { return p.done && !(state.hidden && state.hidden[p.done.idx]); }
+  function recency(d) { return cell(d, "lastOrder") || cell(d, "posted") || 0; }
 
   function banner(kind, html) { var b = $("banner"); b.className = "banner " + kind; b.innerHTML = html; }
   function busy(msg) { banner("info", '<span class="spin"></span>' + esc(msg)); }
   function fail(e) {
     var m = e && e.message ? e.message : String(e);
     if (e && e.status === 403) m = "You don't have permission to open the customer spreadsheet. (" + m + ")";
-    if (e && e.status === 404) m = "Couldn't find the customer spreadsheet. Check the link in config.js. (" + m + ")";
+    if (e && e.status === 404) m = "Couldn't find the customer spreadsheet. Check config.js. (" + m + ")";
     banner("bad", "Something went wrong<small>" + esc(m) + "</small>");
   }
 
@@ -52,9 +46,15 @@
     return new Promise(function (resolve) {
       var item = Office.context.mailbox.item;
       if (!item) return resolve(null);
-      item.body.getAsync(Office.CoercionType.Text, function (r) {
-        var text = r.status === Office.AsyncResultStatus.Succeeded ? r.value : "";
-        resolve(TCCParse.parseOrderEmail(text, item.subject));
+      // HTML keeps the billing address on separate lines; plain text runs it all together
+      item.body.getAsync(Office.CoercionType.Html, function (r) {
+        if (r.status === Office.AsyncResultStatus.Succeeded && r.value) {
+          var p = TCCParse.parseOrderHtml(r.value, item.subject);
+          if (p.found) return resolve(p);
+        }
+        item.body.getAsync(Office.CoercionType.Text, function (t) {
+          resolve(TCCParse.parseOrderEmail(t.status === Office.AsyncResultStatus.Succeeded ? t.value : "", item.subject));
+        });
       });
     });
   }
@@ -67,6 +67,56 @@
     $("order").innerHTML = esc(bits.join(" · ")) + "<br><b>" + esc(p.nameTidy || p.name) + "</b> · " + esc(p.email || "no email");
   }
 
+  // ---------- spreadsheet layout ----------
+  function loadCache(sig) {
+    if (state.cache && state.cache.sig === sig) return state.cache.schema;
+    try {
+      var c = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null");
+      if (c && c.sig === sig) { state.cache = c; return c.schema; }
+    } catch (e) {}
+    return null;
+  }
+  function saveCache(sig, schema) {
+    state.cache = { sig: sig, schema: schema };
+    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(state.cache)); } catch (e) {}
+  }
+
+  /* Reads headers + names/emails, and works out the columns (cached until the headers change) */
+  async function loadSheet() {
+    var size = await TCCGraph.sheetSize();
+    var headers = await TCCGraph.readHeaders(size.lastCol);
+    var pre = TCCSchema.buildSchema({ headers: headers }, cfg);
+    var nameF = pre.byKey.name, emailF = pre.byKey.email;
+    if (!nameF || !emailF) throw new Error("Couldn't find the '" + (!nameF ? "Name" : "Email address") + "' column in the header rows.");
+    var got = await Promise.all([
+      TCCGraph.readIndex(nameF.letter, emailF.letter, size.lastRow),
+      TCCGraph.readHidden(pre.width)            // columns hidden in Excel are left out of the panel
+    ]);
+    var index = got[0];
+    state.hidden = got[1];
+    var schema = loadCache(pre.signature);
+    if (!schema) {
+      busy("Reading the spreadsheet's columns…");
+      var lastData = index.nextEmptyRow - 1;
+      var inputs = await TCCGraph.readSchemaInputs(size.lastCol, lastData);
+      inputs.headers = headers;
+      schema = TCCSchema.buildSchema(inputs, cfg);
+      // brand-new empty columns: look at the font (Webdings = tick column)
+      var empty = schema.others.filter(function (o) {
+        return !inputs.samples.some(function (r) { return r[o.idx] !== "" && r[o.idx] != null; });
+      });
+      if (empty.length) {
+        inputs.fonts = await TCCGraph.readFonts(empty, lastData);
+        schema = TCCSchema.buildSchema(inputs, cfg);
+      }
+      var below = inputs.belowRow || [];
+      schema.formulasBelow = below.some(function (v) { return typeof v === "string" && v.charAt(0) === "="; });
+      saveCache(pre.signature, schema);
+    }
+    state.size = size; state.headers = headers; state.schema = schema; state.index = index;
+    $("foot").textContent = "Reads and writes: " + (window.TCCWorkbookName || "customer spreadsheet") + ".";
+  }
+
   // ---------- lookup ----------
   async function lookup(query) {
     state.query = query;
@@ -75,17 +125,16 @@
     $("qName").value = query.name || ""; $("qEmail").value = query.email || "";
     busy("Looking up the customer spreadsheet…");
     try {
-      var both = await Promise.all([TCCGraph.readIndex(), TCCGraph.readHeaders()]);
-      state.index = both[0]; state.headers = both[1];
-      $("foot").textContent = "Reads and writes: " + (window.TCCWorkbookName || "customer spreadsheet") + ".";
-      var q = { name: query.name, email: cfg.placeholderEmails.indexOf(String(query.email || "").toLowerCase()) >= 0 ? "" : query.email };
+      await loadSheet();
+      var ph = cfg.placeholderEmails.map(function (e) { return e.toLowerCase(); });
+      var q = { name: query.name, email: ph.indexOf(String(query.email || "").trim().toLowerCase()) >= 0 ? "" : query.email };
       var rows = state.index.rows.map(function (r) {
-        return cfg.placeholderEmails.indexOf(r.email.trim().toLowerCase()) >= 0 ? { row: r.row, name: r.name, email: "" } : r;
+        return ph.indexOf(r.email.trim().toLowerCase()) >= 0 ? { row: r.row, name: r.name, email: "" } : r;
       });
       var res = TCCMatch.findMatches(rows, q, { max: 10 });
       if (res.status === "none") return showNone();
       busy("Loading " + res.candidates.length + " row" + (res.candidates.length > 1 ? "s" : "") + "…");
-      var full = await TCCGraph.readRows(res.candidates.map(function (c) { return c.row; }));
+      var full = await TCCGraph.readRows(res.candidates.map(function (c) { return c.row; }), state.size.lastCol);
       Object.assign(state.rows, full);
       res.candidates.forEach(function (c) { c.data = full[c.row]; });
       if (res.status === "exact") return openEditor(res.candidates[0].row, { kind: "ok", candidate: res.candidates[0], hidden: res.hiddenLookalikes });
@@ -95,30 +144,29 @@
 
   function showNone() {
     banner("bad", "Customer not found<small>No row in the spreadsheet matches this name or email.</small>");
-    var c = $("candidates");
-    c.innerHTML = '<button id="addNew">Add as a new customer</button>';
+    $("candidates").innerHTML = '<button id="addNew">Add as a new customer</button>';
     $("addNew").onclick = function () { openNewForm(); };
   }
 
   function showCandidates(res) {
     var c = res.candidates;
-    // most recent first
-    c.sort(function (a, b) { return recency(b.data) - recency(a.data) || b.row - a.row; });
+    c.sort(function (a, b) { return recency(b.data) - recency(a.data) || b.row - a.row; });   // most recent first
     var emails = {};
     c.forEach(function (x) { var e = x.email.trim().toLowerCase(); if (e) emails[e] = (emails[e] || 0) + 1; });
     if (res.status === "multiple") banner("warn", "Several possible matches<small>Pick the right customer. The most recent is at the top.</small>");
     else banner("warn", "Close match – please check<small>" + esc(c[0].reason) + ".</small>");
     var seen = {};
     $("candidates").innerHTML = c.map(function (x, i) {
-      var v = x.data.values, e = x.email.trim().toLowerCase();
+      var d = x.data, e = x.email.trim().toLowerCase();
       var old = e && emails[e] > 1 && seen[e]; if (e) seen[e] = true;
-      var when = v[colIdx("S")] ? "Last order " + fmtDate(v[colIdx("S")]) : (v[colIdx("R")] ? "1st order " + fmtDate(v[colIdx("R")]) : "");
+      var last = cell(d, "lastOrder"), first = cell(d, "posted");
+      var when = last ? "Last order " + fmtDate(last) : (first ? "1st order " + fmtDate(first) : "");
       return '<div class="cand" tabindex="0" data-row="' + x.row + '">' +
         '<div class="n">' + esc(x.name) + '<span class="tag">Row ' + x.row + '</span>' +
         (i === 0 && res.status === "multiple" ? '<span class="tag">Most recent</span>' : "") +
         (old ? '<span class="tag old">Possibly old row</span>' : "") + "</div>" +
         '<div class="e">' + esc(x.email || "no email") + "</div>" +
-        '<div class="m">' + esc([v[colIdx("U")], when].filter(Boolean).join(" · ")) + "</div>" +
+        '<div class="m">' + esc([cell(d, "frequency"), when].filter(Boolean).join(" · ")) + "</div>" +
         '<div class="why' + (x.level === "exact" ? "" : " warn") + '">' + esc(x.reason) + "</div></div>";
     }).join("") + '<button class="ghost" id="addNew">None of these – add new customer</button>';
     Array.prototype.forEach.call(document.querySelectorAll(".cand"), function (el) {
@@ -131,63 +179,81 @@
     $("addNew").onclick = function () { openNewForm(); };
   }
 
-  // ---------- editor ----------
-  function fieldHtml(f, val, text) {
-    var id = "f_" + f.col, v;
-    if (f.type === "tick") {
-      var extra = isPlainTick(val) ? "" : '<span class="extra">"' + esc(val) + '"</span>';
-      return '<div class="field"><label class="tick"><input type="checkbox" id="' + id + '"' + (isTicked(val) ? " checked" : "") +
-        '><span class="lbl">' + esc(f.label) + "</span>" + extra + "</label></div>";
+  // ---------- fields ----------
+  /* f = {letter, label, type, options}. A tick cell holding real text (e.g. "PAYPAL CANT AMEND TIME")
+     is shown as a text box so it can't be wiped by unticking. */
+  function fieldHtml(f, val, text, extraLabel) {
+    var id = "f_" + f.letter, v;
+    var kind = f.type === "tick" && !isPlainTick(val) ? "text" : f.type;
+    var lbl = esc(f.label) + (extraLabel ? ' <span class="when">' + esc(extraLabel) + "</span>" : "");
+    if (kind === "tick") {
+      return '<div class="field"><label class="tick"><input type="checkbox" data-kind="tick" id="' + id + '"' +
+        (isTicked(val) ? " checked" : "") + '><span class="lbl">' + lbl + "</span></label></div>";
     }
     var input;
-    if (f.type === "date") { v = typeof val === "number" ? serialToISO(val) : ""; input = '<input type="date" id="' + id + '" value="' + v + '">' + (typeof val === "string" && val ? '<span class="extra">Currently: "' + esc(val) + '"</span>' : ""); }
-    else if (f.type === "select") {
-      var opts = f.options.slice(); if (val && opts.indexOf(val) < 0) opts.unshift(val);
-      input = '<select id="' + id + '"><option value=""></option>' + opts.map(function (o) { return "<option" + (o === val ? " selected" : "") + ">" + esc(o) + "</option>"; }).join("") + "</select>";
+    if (kind === "date") {
+      v = typeof val === "number" ? serialToISO(val) : "";
+      input = '<input type="date" data-kind="date" id="' + id + '" value="' + v + '">' +
+        (typeof val === "string" && val ? '<span class="extra">Currently: "' + esc(val) + '"</span>' : "");
+    } else if (kind === "select") {
+      var opts = (f.options || []).slice(); if (val && opts.indexOf(val) < 0) opts.unshift(val);
+      input = '<select data-kind="select" id="' + id + '"><option value=""></option>' + opts.map(function (o) {
+        return "<option" + (o === val ? " selected" : "") + ">" + esc(o) + "</option>"; }).join("") + "</select>";
+    } else if (kind === "longtext") {
+      input = '<textarea data-kind="longtext" id="' + id + '">' + esc(val) + "</textarea>";
+    } else {
+      input = '<input data-kind="text" id="' + id + '" value="' + esc(text != null && text !== "" ? text : val) + '">';
     }
-    else if (f.type === "longtext") input = '<textarea id="' + id + '">' + esc(val) + "</textarea>";
-    else input = '<input id="' + id + '" value="' + esc(text != null && text !== "" ? text : val) + '">';
-    return '<div class="field"><label for="' + id + '">' + esc(f.label) + "</label>" + input + "</div>";
+    return '<div class="field"><label for="' + id + '">' + lbl + "</label>" + input + "</div>";
   }
 
   function readField(f) {
-    var el = $("f_" + f.col);
-    if (f.type === "tick") return el.checked;
-    if (f.type === "date") return el.value ? isoToSerial(el.value) : "";
+    var el = $("f_" + f.letter), kind = el.dataset.kind;
+    if (kind === "tick") return el.checked;
+    if (kind === "date") return el.value ? isoToSerial(el.value) : "";
     return el.value;
   }
 
-  function sameValue(f, orig, now) {
-    if (f.type === "tick") return isTicked(orig) === now;
-    if (f.type === "date") return (typeof orig === "number" ? Math.round(orig) : "") === now || (now === "" && (orig === "" || orig == null));
+  function sameValue(kind, orig, now) {
+    if (kind === "tick") return isTicked(orig) === now;
+    if (kind === "date") return (typeof orig === "number" ? Math.round(orig) : "") === now || (now === "" && (orig === "" || orig == null));
     return String(orig == null ? "" : orig) === String(now);
   }
 
-  function editableFields() {
-    var list = cfg.fields.slice();
-    cfg.phases.forEach(function (p) { list.push({ col: p.done, label: phaseLabel(p) + " – done", type: "tick", phase: p }); });
+  function allFields() {
+    var s = state.schema, list = s.core.concat(s.others).filter(shown);
+    s.phases.forEach(function (p) { if (phaseShown(p)) list.push({ idx: p.done.idx, letter: p.done.letter, label: p.label + " – done", type: "tick" }); });
     return list;
   }
 
+  // ---------- editor ----------
   function openEditor(row, ctx) {
     state.current = { row: row, ctx: ctx };
-    var d = state.rows[row], v = d.values, t = d.text;
-    var c = ctx.candidate;
+    var s = state.schema, d = state.rows[row], v = d.values, t = d.text, c = ctx.candidate;
     if (ctx.kind === "ok") banner("ok", "Customer found<small>Row " + row + " · " + esc(c.reason) + (ctx.hidden ? " · " + ctx.hidden + " similar-looking row(s) ignored" : "") + "</small>");
     else banner("warn", "Check this is the right customer<small>Row " + row + " · " + esc(c.reason) + "</small>");
     $("candidates").innerHTML = ctx.back ? '<button class="back" id="backBtn">← Back to all matches</button>' : "";
     if (ctx.back) $("backBtn").onclick = function () { $("editor").classList.add("hidden"); showCandidates(ctx.back); };
 
     // Due now
-    var today = todaySerial(), due = [], older = [], win = cfg.dueWindowDays || 60;
-    cfg.phases.forEach(function (p) {
-      var dv = v[colIdx(p.due)], done = v[colIdx(p.done)], can = p.canSend ? String(v[colIdx(p.canSend)] || "").toLowerCase() : "";
-      if (isTicked(done) || can === "no") return;
-      if (typeof dv === "number" && dv > 0 && dv <= today) (dv >= today - win ? due : older).push({ p: p, when: "due " + fmtDate(dv) });
-      else if (String(dv).toLowerCase() === "yes") due.push({ p: p, when: "due now" });
+    var today = todaySerial(), due = [], older = [], win = cfg.dueWindowDays || 60, lastDate = 0;
+    s.phases.forEach(function (p) {
+      var dv = v[p.due.idx];
+      var dated = typeof dv === "number" && dv > 0;
+      if (!phaseShown(p)) { if (dated) lastDate = dv; return; }
+      var done = v[p.done.idx], can = p.canSend ? String(v[p.canSend.idx] || "").toLowerCase() : "";
+      if (!isTicked(done) && can !== "no") {
+        if (dated && dv <= today) (dv >= today - win ? due : older).push({ p: p, when: "due " + fmtDate(dv) });
+        // "yes" phases have no date of their own - judge them by the dated phase before them
+        else if (String(dv).toLowerCase() === "yes") {
+          if (lastDate && lastDate < today - win) older.push({ p: p, when: "since " + fmtDate(lastDate) });
+          else due.push({ p: p, when: "due now" });
+        }
+      }
+      if (dated) lastDate = dv;
     });
     var li = function (x) {
-      return '<li><label class="tick"><input type="checkbox" data-done="' + x.p.done + '"><span class="lbl">' + esc(phaseLabel(x.p)) +
+      return '<li><label class="tick"><input type="checkbox" data-done="' + x.p.done.letter + '"><span class="lbl">' + esc(x.p.label) +
         ' <span class="when">' + esc(x.when) + "</span></span></label></li>";
     };
     var dueHtml = (due.length ? '<ul class="due">' + due.map(li).join("") + "</ul>"
@@ -195,23 +261,27 @@
       (older.length ? '<details style="margin-top:6px"><summary>' + older.length + " older, never ticked (more than " + win +
         ' days ago)</summary><ul class="due">' + older.map(li).join("") + "</ul></details>" : "");
 
-    var main = cfg.fields.map(function (f) { return fieldHtml(f, v[colIdx(f.col)], t[colIdx(f.col)]); }).join("");
-    var phaseTicks = cfg.phases.map(function (p) {
-      var f = { col: p.done, label: phaseLabel(p) + " – done", type: "tick" };
-      var dv = t[colIdx(p.due)];
-      return fieldHtml(f, v[colIdx(p.done)]).replace("</span></label>", (dv ? ' <span class="when">(' + esc(dv) + ")</span>" : "") + "</span></label>");
+    var others = s.others.filter(shown);
+    var main = s.core.filter(shown).map(function (f) { return fieldHtml(f, v[f.idx], t[f.idx]); }).join("");
+    var more = others.map(function (f) { return fieldHtml(f, v[f.idx], t[f.idx]); }).join("");
+    var phaseTicks = s.phases.filter(phaseShown).map(function (p) {
+      var f = { letter: p.done.letter, label: p.label + " – done", type: "tick" };
+      var dv = t[p.due.idx];
+      return fieldHtml(f, v[p.done.idx], t[p.done.idx], dv ? "(" + dv + ")" : "");
     }).join("");
 
     $("editor").innerHTML =
       '<div class="card"><h3>Due now</h3>' + dueHtml + "</div>" +
       '<div class="card"><h3>Customer details</h3>' + main + "</div>" +
+      (more ? '<details class="card" open><summary><b>More details</b> <span class="when">(' + others.length + ")</span></summary>" +
+              '<div style="margin-top:8px">' + more + "</div></details>" : "") +
       '<details class="card"><summary><b>All phases</b></summary><div style="margin-top:8px">' + phaseTicks + "</div></details>" +
       '<div class="actions"><button id="saveBtn" disabled>Save changes</button><button class="ghost" id="reloadBtn">Reload</button></div>';
     $("editor").classList.remove("hidden");
 
     // "Due now" ticks mirror the matching "All phases" tick
     Array.prototype.forEach.call(document.querySelectorAll("[data-done]"), function (el) {
-      el.onchange = function () { $("f_" + el.dataset.done).checked = el.checked; markChanged(); };
+      el.onchange = function () { var t2 = $("f_" + el.dataset.done); if (t2 && t2.type === "checkbox") t2.checked = el.checked; markChanged(); };
     });
     $("editor").oninput = markChanged; $("editor").onchange = markChanged;
     $("saveBtn").onclick = save;
@@ -221,21 +291,29 @@
   function pendingChanges() {
     var cur = state.current; if (!cur) return [];
     var v = state.rows[cur.row].values, t = state.rows[cur.row].text, out = [];
-    editableFields().forEach(function (f) {
-      var el = $("f_" + f.col); if (!el) return;
-      var i = colIdx(f.col);
-      // plain text boxes show the cell as displayed (keeps leading zeros on phone numbers)
-      var orig = f.type === "text" && t[i] !== "" && t[i] != null ? t[i] : v[i], now = readField(f);
-      var same = sameValue(f, orig, now);
+    allFields().forEach(function (f) {
+      var el = $("f_" + f.letter); if (!el) return;
+      var kind = el.dataset.kind;
+      // text boxes compare with the cell as displayed (keeps leading zeros on phone numbers)
+      var orig = kind === "text" && t[f.idx] !== "" && t[f.idx] != null ? t[f.idx] : v[f.idx], now = readField(f);
+      var same = sameValue(kind, orig, now);
       el.closest(".field").classList.toggle("changed", !same);
-      if (!same) out.push({ f: f, orig: orig, now: now });
+      if (!same) out.push({ f: f, kind: kind, now: now });
     });
     return out;
   }
   // Stop Excel turning "07921..." into a number and dropping the 0
-  function keepText(f, v) { return (f.type === "text" && /^[0+]\d{6,}$/.test(String(v).replace(/\s/g, ""))) ? "'" + v : v; }
+  function keepText(kind, v) { return (kind === "text" && /^[0+]\d{6,}$/.test(String(v).replace(/\s/g, ""))) ? "'" + v : v; }
   function markChanged() {
-    if (!$("saveBtn")) return; var n = pendingChanges().length; var b = $("saveBtn"); b.disabled = !n; b.textContent = n ? "Save " + n + " change" + (n > 1 ? "s" : "") : "Save changes"; }
+    if (!$("saveBtn")) return;
+    var n = pendingChanges().length, b = $("saveBtn");
+    b.disabled = !n; b.textContent = n ? "Save " + n + " change" + (n > 1 ? "s" : "") : "Save changes";
+  }
+
+  async function headersUnchanged() {
+    var fresh = await TCCGraph.readHeaders(state.size.lastCol);
+    return JSON.stringify(fresh) === JSON.stringify(state.headers);
+  }
 
   async function save() {
     var cur = state.current, changes = pendingChanges();
@@ -243,11 +321,15 @@
     $("saveBtn").disabled = true;
     busy("Checking nobody else has changed this row…");
     try {
-      // Concurrency check: re-read the row and make sure the cells we're changing still hold what we loaded
-      var fresh = (await TCCGraph.readRows([cur.row]))[cur.row];
+      if (!(await headersUnchanged())) {
+        banner("bad", "The spreadsheet's columns have changed<small>Nothing was saved. Press Reload, then make your change again.</small>");
+        $("saveBtn").disabled = false; return;
+      }
+      var fresh = (await TCCGraph.readRows([cur.row], state.size.lastCol))[cur.row];
       var loaded = state.rows[cur.row].values;
-      var clash = changes.filter(function (c) { var i = colIdx(c.f.col); return String(fresh.values[i]) !== String(loaded[i]); });
-      var idClash = String(fresh.values[0]) !== String(loaded[0]) || String(fresh.values[1]) !== String(loaded[1]);
+      var n = core("name").idx, e = core("email").idx;
+      var clash = changes.filter(function (c) { return String(fresh.values[c.f.idx]) !== String(loaded[c.f.idx]); });
+      var idClash = String(fresh.values[n]) !== String(loaded[n]) || String(fresh.values[e]) !== String(loaded[e]);
       if (clash.length || idClash) {
         banner("bad", "Someone else just changed this row<small>Nothing was saved. Press Reload to see the latest, then make your change again." +
           (clash.length ? " Changed: " + esc(clash.map(function (c) { return c.f.label; }).join(", ")) : "") + "</small>");
@@ -255,54 +337,56 @@
       }
       busy("Saving…");
       await TCCGraph.writeCells(changes.map(function (c) {
-        var val = c.f.type === "tick" ? (c.now ? cfg.tickValue : "") : keepText(c.f, c.now);
-        return { col: c.f.col, row: cur.row, value: val, tick: c.f.type === "tick" };
+        var val = c.kind === "tick" ? (c.now ? cfg.tickValue : "") : keepText(c.kind, c.now);
+        return { col: c.f.letter, row: cur.row, value: val, tick: c.kind === "tick" };
       }));
-      var after = (await TCCGraph.readRows([cur.row]))[cur.row];
-      state.rows[cur.row] = after;
+      state.rows[cur.row] = (await TCCGraph.readRows([cur.row], state.size.lastCol))[cur.row];
       var ctx = cur.ctx; ctx.kind = "ok";
       openEditor(cur.row, ctx);
       banner("ok", "Saved ✓<small>" + changes.length + " change" + (changes.length > 1 ? "s" : "") + " written to row " + cur.row + ".</small>");
-    } catch (e) { fail(e); $("saveBtn").disabled = false; }
+    } catch (err) { fail(err); $("saveBtn").disabled = false; }
   }
 
   // ---------- new customer ----------
   function openNewForm() {
-    var p = state.parsed || {}, q = state.query || {};
+    var p = state.parsed || {}, q = state.query || {}, s = state.schema;
     var name = (q.name === p.name ? p.nameTidy : q.name) || "";
-    var pre = { A: name, B: q.email || "", N: p.phone || "", U: TCCParse.guessFrequency(p), R: todaySerial() };
-    var newFields = cfg.fields.filter(function (f) { return f.type !== "tick"; });
+    var pre = { name: name, email: q.email || "", phone: p.phone || "", frequency: TCCParse.guessFrequency(p), posted: todaySerial() };
+    var fields = s.core.filter(function (f) { return f.type !== "tick" && shown(f); });
     state.current = null;
     $("editor").oninput = null; $("editor").onchange = null;
     banner("info", "New customer<small>Check the details, then add. It goes in the next empty row.</small>");
     $("candidates").innerHTML = "";
     $("editor").innerHTML = '<div class="card"><h3>Add new customer</h3>' +
-      newFields.map(function (f) { return fieldHtml(f, pre[f.col] != null ? pre[f.col] : ""); }).join("") +
-      (pre.U ? '<div class="empty">Frequency guessed from the order – please check.</div>' : "") +
+      fields.map(function (f) { return fieldHtml(f, pre[f.key] != null ? pre[f.key] : ""); }).join("") +
+      (pre.frequency ? '<div class="empty">Frequency guessed from the order – please check.</div>' : "") +
+      (s.formulasBelow === false ? '<div class="empty" style="color:var(--warn)">The formula columns don\'t seem to be filled down past the last customer – fill them down in Excel so the phases work for new rows.</div>' : "") +
       '</div><div class="actions"><button id="addBtn">Add customer</button><button class="ghost" id="cancelBtn">Cancel</button></div>';
     $("editor").classList.remove("hidden");
     $("cancelBtn").onclick = function () { lookup(state.query); };
-    $("addBtn").onclick = function () { addCustomer(newFields); };
+    $("addBtn").onclick = function () { addCustomer(fields); };
   }
 
   async function addCustomer(fields) {
-    var vals = {}; fields.forEach(function (f) { vals[f.col] = readField(f); });
-    if (!String(vals.A).trim()) { banner("bad", "A name is needed"); return; }
+    var vals = {}; fields.forEach(function (f) { vals[f.key] = { f: f, kind: $("f_" + f.letter).dataset.kind, v: readField(f) }; });
+    if (!String(vals.name.v).trim()) { banner("bad", "A name is needed"); return; }
     $("addBtn").disabled = true;
     busy("Checking the spreadsheet again…");
     try {
-      var idx = await TCCGraph.readIndex();
-      var e = String(vals.B).trim().toLowerCase();
+      if (!(await headersUnchanged())) {
+        banner("bad", "The spreadsheet's columns have changed<small>Nothing was added. Press Cancel and try again.</small>");
+        $("addBtn").disabled = false; return;
+      }
+      var idx = await TCCGraph.readIndex(core("name").letter, core("email").letter, state.size.lastRow + 50);
+      var e = String(vals.email.v).trim().toLowerCase();
       var dupe = e && TCCMatch.isUsableEmail(e) && idx.rows.filter(function (r) { return r.email.trim().toLowerCase() === e; })[0];
       if (dupe) { banner("warn", "That email is already on row " + dupe.row + "<small>Nothing was added. Search again to open it.</small>"); $("addBtn").disabled = false; return; }
       var row = idx.nextEmptyRow;
-      if (row > cfg.lastFormulaRow) { banner("bad", "The sheet's formulas only go down to row " + cfg.lastFormulaRow + "<small>Fill the formulas further down in Excel first.</small>"); return; }
       busy("Adding to row " + row + "…");
-      await TCCGraph.writeCells(fields.filter(function (f) { return vals[f.col] !== ""; }).map(function (f) {
-        return { col: f.col, row: row, value: keepText(f, vals[f.col]) };
+      await TCCGraph.writeCells(Object.keys(vals).filter(function (k) { return vals[k].v !== ""; }).map(function (k) {
+        return { col: vals[k].f.letter, row: row, value: keepText(vals[k].kind, vals[k].v) };
       }));
-      var full = await TCCGraph.readRows([row]);
-      Object.assign(state.rows, full);
+      Object.assign(state.rows, await TCCGraph.readRows([row], state.size.lastCol));
       openEditor(row, { kind: "ok", candidate: { reason: "New customer added", row: row } });
       banner("ok", "Customer added ✓<small>Row " + row + ".</small>");
     } catch (err) { fail(err); $("addBtn").disabled = false; }
@@ -318,8 +402,7 @@
 
   Office.onReady(function () {
     $("searchForm").onsubmit = function (ev) { ev.preventDefault(); lookup({ name: $("qName").value.trim(), email: $("qEmail").value.trim() }); };
-    $("foot").textContent = "Reads and writes: " + (window.TCCWorkbookName || "customer spreadsheet") + ".";
-    if (Office.context.mailbox && Office.context.mailbox.addHandlerAsync) {
+    if (Office.context.mailbox && Office.context.mailbox.addHandlerAsync && Office.EventType && Office.EventType.ItemChanged) {
       // pinned panel: refresh when a different email is selected
       Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () { state.rows = {}; run(); });
     }
