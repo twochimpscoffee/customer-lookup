@@ -55,6 +55,11 @@ window.TCC_CONFIG = {
   // Helper columns that hold the dropdown lists - never shown or edited
   ignoreHeaders: ["Weekly", "Fortnightly", "Delivery Day"],
 
+  // Which emails the panel looks up when it's pinned open. Anything else just shows "Not an order email".
+  // An email counts as an order if it's from one of these senders, or its subject matches one of these patterns.
+  orderEmailSenders: ["noreply@twochimpscoffee.com"],
+  orderEmailSubjects: ["\\[Two Chimps Coffee\\].*order"],
+
   // "Due now" shows phases due in the last this-many days; older unticked ones are tucked away.
   // Phases are found automatically: a formula column (or two, e.g. "Can we send?")
   // followed by the column where it's ticked off.

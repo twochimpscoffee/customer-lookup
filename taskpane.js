@@ -393,7 +393,36 @@
   }
 
   // ---------- start ----------
+  // Only order emails are looked up; anything else (e.g. a weather email) just shows a quiet note
+  function isOrderEmail(item) {
+    var subj = String(item.subject || "");
+    var from = String((item.from && item.from.emailAddress) || "").toLowerCase();
+    var senders = (cfg.orderEmailSenders || []).map(function (x) { return x.toLowerCase(); });
+    if (senders.indexOf(from) >= 0) return true;
+    return (cfg.orderEmailSubjects || []).some(function (re) { return new RegExp(re, "i").test(subj); });
+  }
+
+  function resetPanel() {
+    state.current = null;
+    $("editor").classList.add("hidden"); $("editor").innerHTML = "";
+    $("candidates").innerHTML = "";
+  }
+
   async function run() {
+    resetPanel();
+    var item = Office.context.mailbox.item;
+    if (!item) {
+      $("order").textContent = "";
+      banner("info", "Select an email to look up its customer.");
+      return;
+    }
+    if (!isOrderEmail(item)) {
+      state.parsed = null;
+      $("order").textContent = "Not an order email.";
+      banner("info", "Nothing to look up<small>Open Search manually if you need a customer.</small>");
+      $("searchBox").open = false;
+      return;
+    }
     state.parsed = await readEmail();
     showOrder(state.parsed);
     if (state.parsed && state.parsed.found) lookup({ name: state.parsed.name, email: state.parsed.email });
