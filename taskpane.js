@@ -73,32 +73,36 @@
   // ---------- Royal Mail Click & Drop ----------
   // Click & Drop's own page addresses use its internal IDs, so we copy the website order number
   // (searching "#452225" finds the order) and open Click & Drop, ready to paste into its search.
-  function copyText(text) {
-    function fallback() {
-      var ta = document.createElement("textarea");
-      ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-      document.body.appendChild(ta); ta.select();
-      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
-      document.body.removeChild(ta);
-      return Promise.resolve(ok);
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text).then(function () { return true; }, fallback);
-    }
-    return fallback();
+  // Copy straight away, while the click still counts as the user's action (before any new tab
+  // takes focus): the old-style copy works inside Outlook's frame; the newer clipboard API is the backup.
+  function copyNow(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", "");
+    ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "0"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+    return ok;
   }
 
   function openClickDrop(orderNo) {
     var ref = (cfg.clickDropSearchPrefix || "") + orderNo;
-    copyText(ref).then(function (ok) {
-      $("cdMsg").innerHTML = ok
+    var ok = copyNow(ref);
+    var done = function (copied) {
+      $("cdMsg").innerHTML = copied
         ? "Copied <b>" + esc(ref) + "</b>. In Click &amp; Drop, click Search, press Ctrl+V, then Enter."
-        : "Search Click &amp; Drop for <b>" + esc(ref) + "</b>.";
-    });
-    try {
-      if (Office.context.ui && Office.context.ui.openBrowserWindow) Office.context.ui.openBrowserWindow(cfg.clickDropUrl);
-      else window.open(cfg.clickDropUrl, "_blank");
-    } catch (e) { window.open(cfg.clickDropUrl, "_blank"); }
+        : "Couldn't copy automatically – select this and press Ctrl+C: " +
+          '<input class="cd-ref" readonly value="' + esc(ref) + '">';
+      var box = document.querySelector(".cd-ref");
+      if (box) { box.onclick = function () { box.select(); }; box.select(); }
+      // open Click & Drop only after copying, so the new tab can't steal focus mid-copy
+      try {
+        if (Office.context.ui && Office.context.ui.openBrowserWindow) Office.context.ui.openBrowserWindow(cfg.clickDropUrl);
+        else window.open(cfg.clickDropUrl, "_blank");
+      } catch (e) { window.open(cfg.clickDropUrl, "_blank"); }
+    };
+    if (ok || !(navigator.clipboard && navigator.clipboard.writeText)) return done(ok);
+    navigator.clipboard.writeText(ref).then(function () { done(true); }, function () { done(false); });
   }
 
   // ---------- spreadsheet layout ----------
