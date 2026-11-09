@@ -54,3 +54,7 @@ button:disabled { opacity: .5; cursor: default; }
 footer { color: var(--muted); font-size: 11px; margin-top: 14px; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
 @keyframes s { to { transform: rotate(360deg); } }
+
+.cd { margin-top: 6px; }
+button.small { padding: 4px 10px; font-size: 12px; }
+.cd-msg { display: block; margin-top: 4px; font-size: 12px; color: var(--ink); }

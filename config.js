@@ -60,6 +60,10 @@ window.TCC_CONFIG = {
   orderEmailSenders: ["noreply@twochimpscoffee.com"],
   orderEmailSubjects: ["\\[Two Chimps Coffee\\].*order"],
 
+  // Royal Mail Click & Drop: the "Open in Click & Drop" button copies "#<order number>" and opens this page
+  clickDropUrl: "https://business.parcel.royalmail.com/orders/",
+  clickDropSearchPrefix: "#",
+
   // "Due now" shows phases due in the last this-many days; older unticked ones are tucked away.
   // Phases are found automatically: a formula column (or two, e.g. "Can we send?")
   // followed by the column where it's ticked off.

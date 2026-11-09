@@ -64,7 +64,41 @@
     var bits = [];
     if (p.orderNo) bits.push("Order #" + p.orderNo);
     if (p.orderType) bits.push(p.orderType.replace(/^New /, ""));
-    $("order").innerHTML = esc(bits.join(" · ")) + "<br><b>" + esc(p.nameTidy || p.name) + "</b> · " + esc(p.email || "no email");
+    $("order").innerHTML = esc(bits.join(" · ")) + "<br><b>" + esc(p.nameTidy || p.name) + "</b> · " + esc(p.email || "no email") +
+      (p.orderNo && cfg.clickDropUrl ? '<div class="cd"><button class="ghost small" id="cdBtn">Open in Click &amp; Drop</button>' +
+        '<span id="cdMsg" class="cd-msg"></span></div>' : "");
+    if (p.orderNo && cfg.clickDropUrl) $("cdBtn").onclick = function () { openClickDrop(p.orderNo); };
+  }
+
+  // ---------- Royal Mail Click & Drop ----------
+  // Click & Drop's own page addresses use its internal IDs, so we copy the website order number
+  // (searching "#452225" finds the order) and open Click & Drop, ready to paste into its search.
+  function copyText(text) {
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      return Promise.resolve(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, fallback);
+    }
+    return fallback();
+  }
+
+  function openClickDrop(orderNo) {
+    var ref = (cfg.clickDropSearchPrefix || "") + orderNo;
+    copyText(ref).then(function (ok) {
+      $("cdMsg").innerHTML = ok
+        ? "Copied <b>" + esc(ref) + "</b>. In Click &amp; Drop, click Search, press Ctrl+V, then Enter."
+        : "Search Click &amp; Drop for <b>" + esc(ref) + "</b>.";
+    });
+    try {
+      if (Office.context.ui && Office.context.ui.openBrowserWindow) Office.context.ui.openBrowserWindow(cfg.clickDropUrl);
+      else window.open(cfg.clickDropUrl, "_blank");
+    } catch (e) { window.open(cfg.clickDropUrl, "_blank"); }
   }
 
   // ---------- spreadsheet layout ----------
@@ -303,7 +337,14 @@
     return out;
   }
   // Stop Excel turning "07921..." into a number and dropping the 0
-  function keepText(kind, v) { return (kind === "text" && /^[0+]\d{6,}$/.test(String(v).replace(/\s/g, ""))) ? "'" + v : v; }
+  // Always save typed text as text: keeps leading zeros on phone numbers, and stops anything
+  // starting with = + - @ (e.g. a customer name like "=HYPERLINK(...)") becoming a live formula.
+  function keepText(kind, v) {
+    if (kind === "tick" || kind === "date" || typeof v !== "string") return v;
+    var s = v.replace(/\s/g, "");
+    if (/^[=+\-@]/.test(v) || (kind === "text" && /^0\d{6,}$/.test(s))) return "'" + v;
+    return v;
+  }
   function markChanged() {
     if (!$("saveBtn")) return;
     var n = pendingChanges().length, b = $("saveBtn");
