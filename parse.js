@@ -39,7 +39,8 @@
   function parseOrderEmail(text, subject) {
     var lines = cleanLines(text);
     var res = { name: "", email: "", phone: "", orderNo: "", orderDate: "", orderType: "",
-                renewEvery: "", isSubscription: false, isSample: false, found: false };
+                renewEvery: "", isSubscription: false, isSample: false, found: false,
+                postcode: "", shippingPostcode: "", billingPostcode: "" };
 
     var bi = lines.findIndex(function (l) { return /^billing address:?$/i.test(l); });
     if (bi >= 0) {
@@ -52,6 +53,24 @@
         else if (!m && PHONE_RE.test(l) && !res.phone) res.phone = l.replace(/\s+/g, "");
       });
     }
+    // Postcodes. Only the SHIPPING address decides "local": orders with no shipping address
+    // (e.g. a course booking or gift voucher) aren't deliveries, so they get no local banner.
+    var PC_RE = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
+    function postcodeIn(blockLines) {
+      for (var i = blockLines.length - 1; i >= 0; i--) {
+        var m = blockLines[i].match(PC_RE);
+        if (m) return (m[1] + " " + m[2]).toUpperCase();
+      }
+      return "";
+    }
+    if (bi >= 0) res.billingPostcode = postcodeIn(block);
+    var si = lines.findIndex(function (l) { return /^shipping address:?$/i.test(l); });
+    if (si >= 0) {
+      var send = lines.findIndex(function (l, i) { return i > si && /^congratulations|^billing address:?$|^two chimps coffee$|^registered office/i.test(l); });
+      res.shippingPostcode = postcodeIn(lines.slice(si + 1, send > 0 ? send : si + 10));
+    }
+    res.postcode = res.shippingPostcode || "";
+
     // fallbacks: "order from Thomas JENNEY." / "order from Megan Ross:"
     if (!res.name) {
       var f = String(text).match(/order from ([^:.\n\[]{2,60}?)\s*[:.\n\[]/i);

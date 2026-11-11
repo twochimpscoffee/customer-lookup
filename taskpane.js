@@ -64,10 +64,41 @@
     var bits = [];
     if (p.orderNo) bits.push("Order #" + p.orderNo);
     if (p.orderType) bits.push(p.orderType.replace(/^New /, ""));
-    $("order").innerHTML = esc(bits.join(" · ")) + "<br><b>" + esc(p.nameTidy || p.name) + "</b> · " + esc(p.email || "no email") +
+    $("order").innerHTML = localBanner(p.postcode) +
+      esc(bits.join(" · ")) + "<br><b>" + esc(p.nameTidy || p.name) + "</b> · " + esc(p.email || "no email") +
       (p.orderNo && cfg.clickDropUrl ? '<div class="cd"><button class="ghost small" id="cdBtn">Open in Click &amp; Drop</button>' +
         '<span id="cdMsg" class="cd-msg"></span></div>' : "");
     if (p.orderNo && cfg.clickDropUrl) $("cdBtn").onclick = function () { openClickDrop(p.orderNo); };
+  }
+
+  // ---------- local hand delivery ----------
+  /* "local" | "maybe" | "no" for a postcode, using local-postcodes.js (4 miles round the roastery) */
+  function localStatus(postcode) {
+    var L = window.TCC_LOCAL;
+    if (!L || !postcode) return { status: "no" };
+    var pc = String(postcode).toUpperCase().replace(/\s+/g, "");
+    var m = pc.match(/^([A-Z]{1,2}\d[A-Z\d]?)(\d)([A-Z]{2})$/);
+    if (!m) return { status: "no" };
+    var sector = m[1] + " " + m[2];
+    if (L.postcodes[pc] != null) return { status: "local", miles: L.postcodes[pc] };
+    if (L.wholeSectors.indexOf(sector) >= 0) return { status: "local" };
+    if (L.outside.indexOf(pc) >= 0) return { status: "no" };
+    if (L.partialSectors.indexOf(sector) >= 0) return { status: "maybe", sector: sector };
+    return { status: "no" };
+  }
+
+  function localBanner(postcode) {
+    var s = localStatus(postcode);
+    var pc = esc(postcode);
+    if (s.status === "local") {
+      return '<div class="local yes">LOCAL – hand deliver<small>' + pc +
+        (s.miles != null ? " · " + s.miles + " miles from the roastery" : " · central Oakham") + "</small></div>";
+    }
+    if (s.status === "maybe") {
+      return '<div class="local maybe">Might be local – check the address<small>' + pc +
+        " is a newer postcode in " + esc(s.sector) + ", part of which is within " + (window.TCC_LOCAL.radiusMiles) + " miles</small></div>";
+    }
+    return "";
   }
 
   // ---------- Royal Mail Click & Drop ----------
@@ -85,6 +116,21 @@
     return ok;
   }
 
+  // Outlook on the web: reuse the same named tab each time (a tab this button opened earlier).
+  // Outlook classic hands links to the web browser as a separate app, so it can only open a new tab there.
+  var CD_TAB = "twochimps-clickdrop";
+  function openClickDropWindow() {
+    var platform = (Office.context.diagnostics && Office.context.diagnostics.platform) || "";
+    if (platform === "OfficeOnline") {
+      var w = window.open(cfg.clickDropUrl, CD_TAB);
+      if (w) { try { w.focus(); } catch (e) {} return; }
+    }
+    try {
+      if (Office.context.ui && Office.context.ui.openBrowserWindow) return Office.context.ui.openBrowserWindow(cfg.clickDropUrl);
+    } catch (e) {}
+    window.open(cfg.clickDropUrl, CD_TAB);
+  }
+
   function openClickDrop(orderNo) {
     var ref = (cfg.clickDropSearchPrefix || "") + orderNo;
     var ok = copyNow(ref);
@@ -96,10 +142,7 @@
       var box = document.querySelector(".cd-ref");
       if (box) { box.onclick = function () { box.select(); }; box.select(); }
       // open Click & Drop only after copying, so the new tab can't steal focus mid-copy
-      try {
-        if (Office.context.ui && Office.context.ui.openBrowserWindow) Office.context.ui.openBrowserWindow(cfg.clickDropUrl);
-        else window.open(cfg.clickDropUrl, "_blank");
-      } catch (e) { window.open(cfg.clickDropUrl, "_blank"); }
+      openClickDropWindow();
     };
     if (ok || !(navigator.clipboard && navigator.clipboard.writeText)) return done(ok);
     navigator.clipboard.writeText(ref).then(function () { done(true); }, function () { done(false); });
