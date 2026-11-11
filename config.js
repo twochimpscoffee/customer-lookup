@@ -10,12 +10,12 @@ window.TCC_CONFIG = {
   tenantId: "7513cbbc-9f58-498a-be21-b7c12713405d",
 
   // The spreadsheet the panel reads and edits.
-  // TESTING: "on boarding updated CLAUDE TEST.xlsx" (Two Chimps Coffee site > Documents)
-  // GOING LIVE: Claude will give you the live file's two IDs to swap in here.
+  // LIVE: "on boarding updated - APP VERSION.xlsx" (Two Chimps Coffee site > Documents)
+  // (Testing copy was "on boarding updated CLAUDE TEST.xlsx", itemId 014EVWT2SXYZTWG3COCNG2JLBBFB2OYHUW)
   driveId: "b!66b-DgKPbUaA7ma0wCDb7qWYb636lyxAsGXW7dSgiwgYQHIYNrRLR4W8vzjHycI7",
-  itemId: "014EVWT2SXYZTWG3COCNG2JLBBFB2OYHUW",
-  // Backup: the sharing link, only used if the two IDs above are blank
-  workbookShareUrl: "https://twochimpscoffee.sharepoint.com/:x:/r/sites/TwoChimpsCoffee/Shared%20Documents/on%20boarding%20updated%20CLAUDE%20TEST.xlsx?d=w6367c6574e6c4d13a4ac212874ec1e96&csf=1&web=1&e=bijphm",
+  itemId: "014EVWT2VJWZI7U4XF5FEI3QHTCHVRDS2N",
+  // Backup lookup by link - not used while the two IDs above are filled in
+  workbookShareUrl: "",
   sheetName: "Sheet1",
 
   headerRows: 2,            // rows 1-2 are headers, customers start on row 3
